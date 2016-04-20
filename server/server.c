@@ -5,56 +5,80 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/shm.h>
+#include <semaphore.h>
 
+void setupServerSocket();
 void broadcast(char* msg, int* clients, int numClients);
+void sendMessage(char* msg, int client);
+void childStuff(int clientfd);
+void receiveMessage(int clientfd);
+
+struct sockaddr_in* server;
+uint16_t port = 3000;
+int sockfd;
+socklen_t serverSize;
 
 int main(int argc, char** argv)
 {
-    int error;
-    char* message = "";
-    int listenfd;
-    socklen_t serverSize;
+    server = malloc(sizeof(struct sockaddr_in));
     int clientfd;
     int MAX_CLIENTS = 1000;
     int* clients = malloc(MAX_CLIENTS * sizeof(int));
     int numberOfConnectedClients = 0;
-    int sockfd;
-    struct sockaddr_in* server;
-   
-   
-    int shmid;
-    int shmid2;
-    key_t key;
-    key_t key2;
-    int *shm;
-    int *shm2;
-    key = 123456;
-    if ((shmid = shmget(key, 100*sizeof(int), IPC_CREAT | 0666)) < 0) {
-        perror("shmget");
-        return -1;
-    }
-    if ((shm = shmat(shmid, NULL, 0)) == (int *) -1) {
-        perror("shmat");
-        return -1;
-    }
+    sem_t block;
+    sem_init(&block, 0, 1);
     
-    key2 = 654321;
-    if ((shmid2 = shmget(key2, 100*sizeof(int), IPC_CREAT | 0666)) < 0) {
-        perror("shmget");
-        return -1;
+    char* message = "hello";
+    int pid;
+    //setup the socket server
+    setupServerSocket();
+    
+   while(1)
+   {
+    printf("Listening....\n");
+    clientfd = accept(sockfd ,  (struct sockaddr *)server , &serverSize);
+    printf("Client Connected.... %d\n", clientfd);
+    
+    //add this client to our array of clients
+    sem_wait(&block);
+    clients[numberOfConnectedClients++] = clientfd;
+    sem_post(&block);
+    
+    //broadcast(message, clients, numberOfConnectedClients);
+    
+    pid = fork();
+    
+    if(pid == 0)
+    {
+        break;
     }
-    if ((shm2 = shmat(shmid2, NULL, 0)) == (int *) -1) {
-        perror("shmat");
-        return -1;
-    }
-        
-        
-        
-    uint16_t port = 3000;
-    server = malloc(sizeof(struct sockaddr_in));
+   }
+   
+   //only do this if we are the child and have broken out of the infinite loop
+   if(pid == 0)
+   {
+       childStuff(clientfd);
+   }
+}
+
+
+void childStuff(int clientfd)
+{
+    printf("Child Stuff\n");
+    sendMessage("Hello from the child.  Do you have candy?", clientfd);
+    receiveMessage(clientfd);
+}
+
+void receiveMessage(int clientfd)
+{
+    int MAX_SIZE = 2000 * sizeof(char);
+    char* server_reply = malloc(MAX_SIZE);
+    int error = recv(clientfd, server_reply, MAX_SIZE, 0);
+    puts(server_reply);
+}
+
+void setupServerSocket()
+{
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd == -1)
     {
@@ -68,56 +92,27 @@ int main(int argc, char** argv)
 
     int yes = 1;
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-        perror("setsockopt");
-        exit(1);
-    }
-    serverSize = sizeof(server);
-    
-    int bindfd = bind(sockfd, (struct sockaddr *)server, sizeof(struct sockaddr));
-    if(bindfd < 0)
+		perror("setsockopt");
+		exit(1);
+	}
+	serverSize = sizeof(server);
+	
+	int error = bind(sockfd, (struct sockaddr *)server, sizeof(struct sockaddr));
+    if(error < 0)
     {
         puts("Problem with binding...\n");
     }
     
-    
-    message = "Welcome to the Server";
-    
-    
-    while(1)
-    {
-        listenfd = listen(sockfd, 100);
-    
-        printf("Listening....\n");
-        clientfd = accept(sockfd ,  (struct sockaddr *)server , &serverSize);
-        printf("Client Connected.... %d\n", clientfd);
-        clients[numberOfConnectedClients++] = clientfd;
-        shm2[0] = numberOfConnectedClients;
-        shm = clients;
-        int pid = fork();
-        if(pid == 0) {
-        printf("Child Loop Start");
-        send(clientfd, message , strlen(message) , 0);
-        
-        while(1)
-        {
-            char* client_reply = malloc(12000 * sizeof(char)); 
-            error = recv(clientfd, client_reply, sizeof(client_reply), 0);
-            if(error < 0)
-            {
-                puts("recv failed");
-                break;
-            }
-            else
-            {
-                puts("Reply received:");
-                puts(client_reply);
-               broadcast(client_reply, shm, shm2[0]);
-            }
-        }
-        break;
-        }
-    }
-    //write(clientfd, buffer, sizeof(buffer));
+    error = listen(sockfd, 100);
+}
+
+void sendMessage(char* msg, int client)
+{
+    puts("Sending a message");
+    printf("Size of msg is: %d\n", (int)sizeof(*msg));
+    printf("Size of msg is: %d\n", (int)strlen(msg));
+    send(client , msg , strlen(msg) , 0);
+    puts("Message Sent");
 }
 
 void broadcast(char* msg, int* clients, int numClients)
